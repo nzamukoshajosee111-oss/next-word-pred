@@ -1,11 +1,11 @@
-
-
-
 import json
 from pathlib import Path
 
 import torch
-from model import TransformerModel
+from model import TinyWordGPT
+
+# Import the exact block size used during training
+from preprocess import BLOCK_SIZE
 
 
 # --------------------------------------------------
@@ -36,20 +36,26 @@ def load_vocabulary():
         )
 
     with open(VOCAB_PATH, "r", encoding="utf-8") as file:
-        vocab = json.load(file)
+        raw = json.load(file)
 
-    if not isinstance(vocab, dict) or not vocab:
-        raise ValueError(
-            "vocab.json must contain a non-empty word-to-ID dictionary."
-        )
+    # Support two formats:
+    #   1) flat dict:           {"word": id, ...}
+    #   2) {"vocab": [...], ...}
+    if isinstance(raw, dict) and "vocab" in raw and isinstance(raw["vocab"], list):
+        words = raw["vocab"]
+        vocab = {word: idx for idx, word in enumerate(words)}
+    elif isinstance(raw, dict):
+        vocab = raw
+    else:
+        raise ValueError("vocab.json has an unsupported structure.")
 
-    # Validate that vocabulary IDs are integers.
     try:
-        vocab = {word: int(index) for word, index in vocab.items()}
+        vocab = {str(w): int(i) for w, i in vocab.items()}
     except (TypeError, ValueError) as error:
-        raise ValueError(
-            "Vocabulary IDs must be integers."
-        ) from error
+        raise ValueError("Vocabulary IDs must be integers.") from error
+
+    if not vocab:
+        raise ValueError("Vocabulary is empty.")
 
     return vocab
 
@@ -67,9 +73,7 @@ def load_model(use_residual=True):
     """
 
     checkpoint_path = (
-        RESIDUAL_ON_PATH
-        if use_residual
-        else RESIDUAL_OFF_PATH
+        RESIDUAL_ON_PATH if use_residual else RESIDUAL_OFF_PATH
     )
 
     if not checkpoint_path.exists():
@@ -79,31 +83,26 @@ def load_model(use_residual=True):
 
     vocab = load_vocabulary()
 
-    # This constructor must match Member 1's model.py.
-    model = TransformerModel(
+    # Must match train.py exactly — same block_size!
+    model = TinyWordGPT(
         vocab_size=len(vocab),
-        use_residual=use_residual
+        block_size=BLOCK_SIZE,
+        embed_dim=64,
+        num_heads=4,
+        num_layers=2,
+        use_residual=use_residual,
     )
 
-    # Checkpoints should contain a state_dict or a dictionary
-    # with a "model_state_dict" entry.
     try:
         checkpoint = torch.load(
             checkpoint_path,
             map_location=DEVICE,
-            weights_only=True
+            weights_only=False,
         )
     except TypeError:
-        # Compatibility with older PyTorch versions.
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location=DEVICE
-        )
+        checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
 
-    if (
-        isinstance(checkpoint, dict)
-        and "model_state_dict" in checkpoint
-    ):
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     else:
         state_dict = checkpoint
@@ -122,17 +121,14 @@ def load_model(use_residual=True):
 def encode_text(text, vocab):
     """
     Convert a sentence into token IDs.
-
-    This simple version splits on whitespace.
-    Match this behavior to preprocess.py.
+    Must match preprocess.tokenize() behavior.
     """
+    import re
+    words = re.findall(r"[a-z]+(?:'[a-z]+)?", text.lower())
 
-    words = text.lower().strip().split()
-
-    unknown_id = vocab.get("<unk>")
+    unknown_id = vocab.get("<UNK>")
 
     token_ids = []
-
     for word in words:
         if word in vocab:
             token_ids.append(vocab[word])
@@ -148,25 +144,14 @@ def encode_text(text, vocab):
 
 def suggest_next_words(text, top_k=3, use_residual=True):
     """
-    Return a list of dictionaries containing suggested words
-    and their probabilities.
-
-    Example:
-    [
-        {"word": "happy", "probability": 0.42},
-        {"word": "ready", "probability": 0.25},
-        {"word": "here", "probability": 0.12}
-    ]
+    Return a list of dicts:
+    [{"word": "happy", "probability": 0.42}, ...]
     """
 
     if not isinstance(text, str):
         raise TypeError("Input text must be a string.")
 
-    if (
-        not isinstance(top_k, int)
-        or isinstance(top_k, bool)
-        or top_k < 1
-    ):
+    if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1:
         raise ValueError("top_k must be a positive integer.")
 
     if not isinstance(use_residual, bool):
@@ -175,84 +160,64 @@ def suggest_next_words(text, top_k=3, use_residual=True):
     if not text.strip():
         return []
 
-    # Load the appropriate model and vocabulary.
     model, vocab = load_model(use_residual=use_residual)
 
-    # Convert the sentence into token IDs.
     token_ids = encode_text(text, vocab)
 
+    # If the sentence has no known tokens, return nothing.
     if not token_ids:
         return []
+
+    # Truncate to the last BLOCK_SIZE tokens (model can only see that far)
+    token_ids = token_ids[-BLOCK_SIZE:]
 
     input_tensor = torch.tensor(
         [token_ids],
         dtype=torch.long,
-        device=DEVICE
+        device=DEVICE,
     )
 
-    # Run inference without calculating gradients.
     with torch.inference_mode():
         output = model(input_tensor)
 
-        # Support models that return (logits, other_values).
         if isinstance(output, tuple):
             output = output[0]
-
-        # Support models that return {"logits": ...}.
         elif isinstance(output, dict):
             if "logits" not in output:
-                raise ValueError(
-                    "Model output dictionary must contain 'logits'."
-                )
+                raise ValueError("Model output dict must contain 'logits'.")
             output = output["logits"]
 
-        # Expected output:
-        # [batch_size, sequence_length, vocabulary_size]
-        # or [batch_size, vocabulary_size]
         if output.ndim == 3:
             logits = output[0, -1, :]
-
         elif output.ndim == 2:
             logits = output[0]
-
         else:
             raise ValueError(
                 "Unexpected model output shape. "
-                "Expected [batch, sequence, vocab] "
-                "or [batch, vocab]."
+                "Expected [batch, seq, vocab] or [batch, vocab]."
             )
 
         probabilities = torch.softmax(logits, dim=-1)
 
-        # Limit the number of suggestions to the vocabulary size.
-        number_to_return = min(
-            top_k,
-            probabilities.numel()
-        )
+        number_to_return = min(top_k, probabilities.numel())
 
         top_probabilities, top_ids = torch.topk(
             probabilities,
-            number_to_return
+            number_to_return,
         )
 
-    # Convert vocabulary IDs back into words.
-    id_to_word = {
-        index: word
-        for word, index in vocab.items()
-    }
+    id_to_word = {index: word for word, index in vocab.items()}
 
     special_tokens = {
-        "<pad>",
-        "<unk>",
-        "<bos>",
-        "<eos>"
+        "<pad>", "<unk>", "<bos>", "<eos>",
+        "<PAD>", "<UNK>", "<BOS>", "<EOS>",
     }
 
     suggestions = []
 
     for token_id, probability in zip(
         top_ids.tolist(),
-        top_probabilities.tolist()
+        top_probabilities.tolist(),
     ):
         word = id_to_word.get(token_id)
 
@@ -261,7 +226,7 @@ def suggest_next_words(text, top_k=3, use_residual=True):
 
         suggestions.append({
             "word": word,
-            "probability": float(probability)
+            "probability": float(probability),
         })
 
     return suggestions

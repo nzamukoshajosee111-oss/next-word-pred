@@ -1,5 +1,7 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-# CELL 6: Transformer with optional residual connections
 
 class CausalSelfAttention(nn.Module):
 
@@ -79,7 +81,6 @@ class TransformerBlock(nn.Module):
 
         if self.use_residual:
             x = x + attention_output
-
         else:
             x = attention_output
 
@@ -88,7 +89,6 @@ class TransformerBlock(nn.Module):
 
         if self.use_residual:
             x = x + ffn_output
-
         else:
             x = ffn_output
 
@@ -141,16 +141,17 @@ class TinyWordGPT(nn.Module):
             x = block(x)
 
         x = self.final_ln(x)
-        logits = self.lm_head(x)
+        logits = self.lm_head(x)                # (batch, seq, vocab)
 
         loss = None
 
         if targets is not None:
-            loss = F.cross_entropy(
-                logits.reshape(-1, logits.size(-1)),
-                targets.reshape(-1),
-                ignore_index=-100
-            )
+            # ---- FIX: predict only the NEXT token ----
+            # preprocess.py gives us one target per example,
+            # so we only use the logits at the last position.
+            last_logits = logits[:, -1, :]      # (batch, vocab)
+            loss = F.cross_entropy(last_logits, targets)
+            # -------------------------------------------
 
         return logits, loss
 

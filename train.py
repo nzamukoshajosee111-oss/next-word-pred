@@ -1,6 +1,7 @@
 
 import torch
 import numpy as np
+from pathlib import Path
 
 from model import TinyWordGPT
 from preprocess import (
@@ -194,3 +195,57 @@ def train_model(steps=TRAINING_STEPS):
     print("TRAINING COMPLETE")
     print("========================================")
 
+import os
+os.makedirs("artifacts", exist_ok=True)
+torch.save({"model_state_dict": model.state_dict()},
+           f"artifacts/model_residual_{'on' if model.use_residual else 'off'}.pt")
+
+
+def train_and_save(use_residual, steps=TRAINING_STEPS, tag=""):
+    model = TinyWordGPT(
+        vocab_size=vocab_size,
+        block_size=BLOCK_SIZE,
+        embed_dim=EMBED_DIM,
+        num_heads=NUM_HEADS,
+        num_layers=NUM_LAYERS,
+        use_residual=use_residual,
+    ).to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+    for step in range(1, steps + 1):
+        x, y = get_batch("train", batch_size=BATCH_SIZE)
+        x, y = x.to(device), y.to(device)
+        _, loss = model(x, y)
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        if step == 1 or step % 50 == 0:
+            tl = evaluate_loss(model, "train")
+            vl = evaluate_loss(model, "val")
+            print(f"[{tag}] Step {step:4d} | train {tl:.4f} | val {vl:.4f}")
+
+    Path("artifacts").mkdir(exist_ok=True)
+    out = Path("artifacts") / f"model_residual_{'on' if use_residual else 'off'}.pt"
+    torch.save({"model_state_dict": model.state_dict()}, out)
+    print(f"Saved: {out}")
+
+
+def evaluate_loss(model, split="val", batches=20):
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for _ in range(batches):
+            x, y = get_batch(split, batch_size=BATCH_SIZE)
+            x, y = x.to(device), y.to(device)
+            _, loss = model(x, y)
+            losses.append(loss.item())
+    model.train()
+    return float(np.mean(losses))
+
+
+if __name__ == "__main__":
+    train_and_save(True,  tag="residual ON")
+    train_and_save(False, tag="residual OFF")
