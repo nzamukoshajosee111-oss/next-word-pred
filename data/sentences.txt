@@ -1,0 +1,61 @@
+the cat sits on the mat
+the cat sleeps on the bed
+the cat drinks milk
+the cat likes fish
+the dog runs in the park
+the dog plays in the garden
+the dog eats food
+the boy reads a book
+the boy goes to school
+the girl reads a book
+the girl drinks water
+the girl sings a song
+the teacher helps the student
+the teacher writes on the board
+the student studies every day
+the student asks a question
+the bird flies in the sky
+the fish swims in water
+the sun shines in the sky
+the sky is blue
+the flowers grow in the garden
+the farmer works on the farm
+the baby sleeps in the room
+the family eats dinner together
+the children play at school
+the mother cooks food
+the father reads a newspaper
+the car moves on the road
+the bus stops near the school
+the computer helps people work
+the student uses a computer
+the phone is on the table
+the book is on the desk
+the boy opens the door
+the girl closes the window
+the teacher explains the lesson
+the student learns new words
+we learn something new every day
+we work together as a team
+we study english at school
+we write code in python
+the model learns from examples
+the model predicts the next word
+the transformer processes the input
+the attention layer learns relationships
+the residual connection adds information
+the neural network learns patterns
+the application suggests the next word
+the user types a sentence
+the model returns three suggestions
+the team tests the model
+the students present their project
+the next word depends on context
+words form meaningful sentences
+the boy walks to the market
+the girl walks to school
+the student gives an answer
+the cat sits beside the dog
+the dog plays with a ball
+the sun rises in the morning
+the stars shine at night
